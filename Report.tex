@@ -36,7 +36,7 @@
 \lstset{style=mystyle}
 
 \title{\textbf{Vectorless Reasoning RAG Architecture}\\ \large Integrating PageIndex, MongoDB, and Streamlit}
-\author{Project Documentation}
+\author{Project Documentation \& Key Understandings}
 \date{\today}
 
 \begin{document}
@@ -46,59 +46,60 @@
 \newpage
 
 \section{Introduction}
-The objective of this project is to develop a sophisticated, vectorless Retrieval-Augmented Generation (RAG) chatbot. Traditional RAG architectures rely on vector databases (e.g., Pinecone, Milvus) and cosine similarity to retrieve chunked text. While effective for general semantic search, this approach often fails when querying complex, structured documents due to lost context. 
+The objective of this project is to develop a sophisticated, vectorless Retrieval-Augmented Generation (RAG) chatbot. Traditional RAG architectures rely on vector databases and cosine similarity to retrieve chunked text. While effective for general semantic search, this approach often fails when querying complex, structured documents due to lost context. 
 
-This project implements a novel architecture utilizing the \textbf{PageIndex} framework, which leverages Large Language Model (LLM) reasoning over hierarchical document trees, supported by a \textbf{MongoDB} system of record, and a \textbf{Streamlit} user interface for continuous conversational context.
+This project implements a novel decoupled architecture utilizing the \textbf{PageIndex} framework, which leverages Large Language Model (LLM) reasoning over hierarchical document trees, supported by a \textbf{MongoDB} system of record, and a \textbf{Streamlit} user interface for continuous conversational context.
 
 \section{Key Conceptual Learnings}
-During the development of this project, several core concepts were mastered:
+During the development of this project, several core architectural concepts were mastered:
 
-\subsection{Local MongoDB vs. MongoDB Atlas}
+\subsection{Traditional Vector RAG vs. Vectorless RAG (PageIndex)}
 \begin{itemize}
-    \item \textbf{Local MongoDB (via Docker):} Represents a self-hosted database architecture. By running MongoDB in a Docker container, we learned how to map physical storage volumes (\texttt{/data/db}) to the host machine and manage database daemons (\texttt{mongod}) directly. This is ideal for secure, offline, and cost-effective local development.
-    \item \textbf{MongoDB Atlas:} Represents a fully managed cloud database service (DBaaS). Atlas abstracts away the infrastructure, providing automated backups, high-availability replica sets, and advanced features like Atlas Vector Search. The transition from Local to Atlas simply involves changing the connection string (\texttt{mongodb+srv://...}), proving the flexibility of our architecture.
+    \item \textbf{Traditional RAG:} Typically involves chunking text into small overlapping pieces, converting them into high-dimensional vectors, and storing them locally. While fast, it often loses the overarching context or structural meaning of long documents, returning mathematically similar but contextually irrelevant chunks.
+    \item \textbf{Vectorless RAG:} Uses LLMs to read the document and build a hierarchical tree of nodes remotely. When querying, it logically traverses this tree to find the exact section containing the answer, preserving deep structural context without relying on vector similarity math. This offloads the heavy lifting to external servers.
 \end{itemize}
 
-\subsection{Traditional RAG vs. PageIndex (Vectorless RAG)}
+\subsection{Why use MongoDB? (Decoupled Architecture)}
+A major conceptual breakthrough was understanding why a local database is necessary when the heavy text processing is handled by PageIndex. 
 \begin{itemize}
-    \item \textbf{Traditional RAG:} Typically involves chunking text into small overlapping pieces, converting them into high-dimensional vectors, and storing them in a Vector Database. While fast, it often loses the overarching context or structural meaning of long documents.
-    \item \textbf{PageIndex (Vectorless RAG):} Represents a \textit{vectorless} reasoning approach. It uses Large Language Models to read the document and build a hierarchical tree of nodes. When querying, it logically traverses this tree to find the exact section containing the answer, preserving deep structural context without relying on vector similarity math.
+    \item \textbf{Multi-tenancy \& Security:} PageIndex has no concept of "users". MongoDB acts as the system of record to map specific documents to specific users, ensuring privacy in a production environment.
+    \item \textbf{Rich Custom Metadata:} PageIndex only stores raw text. MongoDB allows the application to store custom descriptions, timestamps, author names, and custom tags alongside the simple \texttt{doc\_id} returned by PageIndex.
+    \item \textbf{Performance Optimization:} Querying a local database to populate the UI (e.g., listing all uploaded books) is instantaneous and avoids hitting third-party API rate limits.
 \end{itemize}
 
 \section{System Architecture}
 
 \subsection{MongoDB: The System of Record}
-MongoDB serves as the foundational metadata store for the application. Rather than installing MongoDB directly onto the host operating system, it is deployed via \textbf{Docker}.
+MongoDB serves as the foundational metadata store for the application, deployed via \textbf{Docker}.
 \begin{itemize}
-    \item \textbf{Containerization:} A \texttt{docker-compose.yml} file orchestrates the \texttt{mongo:latest} image, mapping port 27017.
-    \item \textbf{Persistence:} Data is persisted locally using a Docker volume (\texttt{mongodb\_data}), ensuring that metadata survives container restarts.
-    \item \textbf{Role in RAG:} MongoDB stores a collection named \texttt{document\_nodes}. When a document is ingested, MongoDB records the \texttt{filename}, \texttt{upload\_date}, and crucially, the \texttt{pageindex\_doc\_id}. This decouples the raw application data from the proprietary indexing service.
+    \item \textbf{Containerization:} A \texttt{docker-compose.yml} file orchestrates the \texttt{mongo:latest} image.
+    \item \textbf{Role in RAG:} MongoDB stores a collection named \texttt{document\_nodes}. When a document is ingested, MongoDB records the \texttt{filename}, \texttt{upload\_date}, \texttt{description}, and crucially, the \texttt{pageindex\_doc\_id}.
 \end{itemize}
 
 \subsection{PageIndex: Vectorless Reasoning Engine}
-PageIndex acts as the core retrieval and reasoning engine. The workflow operates as follows:
+PageIndex acts as the core retrieval engine. The workflow operates as follows:
 \begin{enumerate}
-    \item \textbf{Document Ingestion:} Documents (e.g., PDFs) are submitted to the PageIndex API via the \texttt{submit\_document} endpoint.
-    \item \textbf{Hierarchical Tree Construction:} Instead of mathematical vectorization, the underlying LLM extracts the structural hierarchy of the document (Chapters, Sections, Paragraphs).
-    \item \textbf{Retrieval via Reasoning:} When a user query is received, the system does not calculate nearest-neighbor distances. Instead, the LLM traverses the tree logically (e.g., ``The user is asking about methodology, I will look in Chapter 2'').
+    \item \textbf{Document Ingestion:} Documents are submitted to the PageIndex API via the \texttt{submit\_document} endpoint.
+    \item \textbf{Hierarchical Tree Construction:} The underlying LLM extracts the structural hierarchy of the document remotely.
+    \item \textbf{Retrieval via Reasoning:} When a user query is received, the LLM traverses the tree logically to formulate highly accurate, cited answers.
 \end{enumerate}
-
-\subsection{Fallback Mechanism: Gemini via OpenAI SDK}
-To ensure high availability and flexibility, a fallback mechanism is implemented.
-If the PageIndex reasoning engine fails to formulate an answer, the query is routed to Google's \textbf{Gemini 1.5 Flash} model. This is achieved using the \texttt{openai} Python SDK, configured with a custom \texttt{base\_url} (\texttt{https://generativelanguage.googleapis.com/v1beta/openai/}). This design pattern ensures the system is completely model-agnostic.
 
 \section{Data Flow}
 
-\subsection{Ingestion Pipeline}
-The ingestion process, handled by \texttt{ingest\_document.py}, executes the following sequence:
+\subsection{Universal Ingestion Pipeline}
+The ingestion process, handled by \texttt{ingest\_document.py}, has been abstracted to be 100\% universal. It uses Python's \texttt{argparse} to accept any PDF from the command line without hardcoded paths:
 \begin{lstlisting}[language=Python]
-# 1. Submit document to PageIndex
-result = pi_client.submit_document("sample_document.pdf")
+# 1. Terminal Execution
+# python src\ingest_document.py "path/to/book.pdf" --description "Optional"
+
+# 2. Submit document to PageIndex
+result = pi_client.submit_document(args.file_path)
 doc_id = result.get("doc_id")
 
-# 2. Store metadata in MongoDB
+# 3. Store metadata in MongoDB
 document_record = {
-    "filename": "sample_document.pdf",
+    "filename": os.path.basename(args.file_path),
+    "description": args.description,
     "pageindex_doc_id": doc_id,
     "status": "indexed"
 }
@@ -120,13 +121,13 @@ response = pi_client.chat_completions(
 \end{lstlisting}
 
 \section{User Interface (Streamlit)}
-The application layer is built using Streamlit (\texttt{app.py}). This provides a responsive, web-based interface.
+The application layer is built using Streamlit (\texttt{app.py}).
 \begin{itemize}
-    \item \textbf{Document Selection:} The sidebar queries MongoDB to populate a dropdown menu of available documents.
-    \item \textbf{Continuous History:} Utilizing \texttt{st.session\_state}, the application stores the array of \texttt{messages}. This allows the PageIndex reasoning engine to maintain conversational context across multiple sequential questions, preventing previous answers from disappearing.
+    \item \textbf{Dynamic Selection:} The sidebar queries MongoDB dynamically to populate a dropdown menu of all universally uploaded documents.
+    \item \textbf{Continuous History:} Utilizing \texttt{st.session\_state}, the application stores the array of \texttt{messages}. This allows the PageIndex reasoning engine to maintain conversational context across multiple sequential questions.
 \end{itemize}
 
 \section{Conclusion}
-By combining the structural flexibility of MongoDB, the reasoning capabilities of PageIndex, and the rapid UI deployment of Streamlit, we have constructed a highly resilient and context-aware chatbot. This architecture proves superior to traditional vector databases for documents requiring strict structural comprehension and logical navigation.
+By combining the structural metadata flexibility of MongoDB, the heavy-duty reasoning capabilities of PageIndex, and a dynamic UI in Streamlit, this project successfully implements a highly scalable, decoupled architecture. This design mirrors production-grade enterprise SaaS platforms, proving superior to traditional vector databases for complex, unstructured data comprehension.
 
 \end{document}

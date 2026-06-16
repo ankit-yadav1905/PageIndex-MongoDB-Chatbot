@@ -1,0 +1,6 @@
+streamlit
+pymongo
+pageindex
+python-dotenv
+openai
+pypdf

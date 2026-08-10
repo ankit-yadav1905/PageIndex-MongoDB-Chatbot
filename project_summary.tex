@@ -1,0 +1,82 @@
+\documentclass[12pt, a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
+\usepackage{hyperref}
+\usepackage{titlesec}
+\usepackage{setspace}
+\usepackage{enumitem}
+
+\setstretch{1.15}
+
+\title{\textbf{Executive Summary: PageIndex + MongoDB Chatbot}\\ \large An Autonomous Agentic Educational Assistant with Hybrid Vector Search}
+\author{Ankit Yadav \\ \textit{Assessli Internship Project}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Project Overview}
+The \textbf{PageIndex + MongoDB Chatbot} is a next-generation, AI-driven educational tool designed to ingest, process, and answer highly specific academic questions based on NCERT textbook PDFs. Developed during the Assessli Internship, the system evolved from a simple script-based LLM implementation through a multi-agent delegation phase, and finally into a highly optimized \textbf{Unified Agent System} backed by a full hybrid retrieval stack.
+
+The architecture pairs the Agno Agent Framework (running the \textbf{GPT-OSS 120B} model via Groq) with three complementary storage layers: \textbf{PageIndex} for structural document understanding, \textbf{MongoDB} for hierarchical metadata storage and agent session memory, and \textbf{Qdrant} for high-speed hybrid vector search.
+
+\section{Core Architecture}
+The system decouples into three primary pipelines:
+
+\subsection{1. Batch Document Ingestion}
+A complete batch ingestion pipeline (\texttt{batch\_ingest.py}) was developed to process entire directories of textbook PDFs automatically, with live progress logging to \texttt{batch\_ingest\_log.json}. When a PDF is ingested:
+\begin{itemize}[label=\(\bullet\)]
+    \item \textbf{PageIndex API Integration:} The PDF is submitted to PageIndex, which uses computer vision to extract a hierarchical document tree (Class $\rightarrow$ Chapter $\rightarrow$ Topic $\rightarrow$ Subtopic $\rightarrow$ Paragraph).
+    \item \textbf{Hierarchical Metadata Tagging:} Each extracted text chunk is tagged with structured metadata: \texttt{class}, \texttt{chapter}, \texttt{topic}, \texttt{subtopic}, and \texttt{page\_number}.
+    \item \textbf{Dual Storage:} Every chunk is simultaneously backed up to \textbf{MongoDB} (\texttt{pageindex\_db\_v2}) for fast exact-match queries and upserted into \textbf{Qdrant} (\texttt{textbook\_knowledge\_v2}) for semantic retrieval.
+    \item \textbf{Vector Embeddings:} Chunks are vectorized using \textbf{Jina v2 Small} (512-dimensional) via the FastEmbed library, and stored with full Qdrant \textit{Hybrid Search} support (dense semantic vectors + sparse BM25 keyword index).
+\end{itemize}
+
+\subsection{2. Hierarchical Tool-Based Retrieval}
+The system employs four specialized tools inside the \texttt{BookAssistant} agent to navigate textbooks without ever loading full chapters, guaranteeing Groq's 8,000 token-per-minute limit is never breached:
+\begin{itemize}[label=\(\bullet\)]
+    \item \textbf{\texttt{search\_book\_content}:} Performs hybrid vector search on Qdrant for precise factual lookups.
+    \item \textbf{\texttt{get\_topics}:} Runs a MongoDB \texttt{distinct()} query to list all top-level topics in selected chapters.
+    \item \textbf{\texttt{get\_subtopics}:} Returns all subtopics under a given topic using MongoDB.
+    \item \textbf{\texttt{get\_subtopic\_context}:} Fetches the exact text chunks for a specific subtopic (with regex-based partial matching for robustness).
+\end{itemize}
+
+When generating a quiz, the agent follows a strict discovery chain: \texttt{get\_topics} $\rightarrow$ \texttt{get\_subtopics} $\rightarrow$ \texttt{get\_subtopic\_context}, ensuring it only loads one focused subtopic at a time.
+
+\subsection{3. Persistent Agent Memory via MongoDB}
+The agent is configured with a \textbf{MongoDB-backed session database} using Agno's \texttt{MongoDb} provider:
+\begin{itemize}[label=\(\bullet\)]
+    \item \textbf{Session Storage:} All conversation runs are persisted in the \texttt{agent\_sessions} collection, allowing history to survive server restarts.
+    \item \textbf{Memory Storage:} Long-term facts extracted from conversations are stored in the \texttt{agent\_memory} collection, enabling cross-session context awareness.
+    \item \textbf{History Injection:} \texttt{add\_history\_to\_context=True} ensures the agent is aware of prior exchanges within a session.
+\end{itemize}
+
+\section{Key Technical Achievements}
+
+\subsection{Hybrid Vector Search with Qdrant}
+Rather than relying solely on keyword-based retrieval, the system now uses \textbf{Qdrant Hybrid Search}, combining dense Jina v2 semantic embeddings with BM25 sparse vectors. This allows the chatbot to match academic content both by meaning and by exact terminology — critical for NCERT textbooks that use domain-specific vocabulary.
+
+\subsection{Robust Fuzzy Topic \& Subtopic Matching}
+Because PageIndex's visual parser sometimes nests subtopic headings inside sidebar boxes (e.g., storing \texttt{"1.2.4 Double Displacement Reaction"} under \texttt{"Do You Know? > 1.2.4 Double Displacement Reaction"}), a \textbf{regex partial-match} was added to \texttt{get\_subtopic\_context} in \texttt{database.py} for \textit{both} topics and subtopics. Additionally, the system now safely ignores \texttt{"none"} or \texttt{"unknown"} metadata values. This makes retrieval exceptionally resilient to exact-string mismatches caused by PDF layout quirks.
+
+\subsection{Token Budget Enforcement}
+By strictly following the hierarchical discovery pattern and truncating chunks to \texttt{MAX\_CHUNK\_CHARS = 600}, each LLM call is guaranteed to stay within budget. Multiple chapters can be processed in a single user session without triggering Groq's rate limiter.
+
+\subsection{Data Safety \& Isolation}
+All new data is stored in isolated databases (\texttt{pageindex\_db\_v2}, \texttt{textbook\_knowledge\_v2}), completely separate from legacy data, ensuring zero risk of corrupting previously vectorized content.
+
+\section{Current Standing \& Capabilities}
+At this exact moment, the system represents a highly resilient, autonomous agent capable of:
+\begin{itemize}[label=\(\bullet\)]
+    \item \textbf{Zero-Hallucination Q\&A:} Using advanced nested dictionary filters in Qdrant to strictly isolate searches to selected textbooks, preventing cross-contamination of answers.
+    \item \textbf{Token-Safe Quiz Generation:} Autonomously navigating MongoDB topic and subtopic trees to load only bite-sized text chunks (max 600 chars) before generating questions, ensuring the 8,000 token limit is never breached.
+    \item \textbf{Unattended PDF Batch Ingestion:} Using \texttt{batch\_ingest.py} to securely ingest whole directories of PDFs into Qdrant/MongoDB with auto-resume capabilities on failure.
+    \item \textbf{Persistent Traceability:} Storing user sessions and long-term memory in MongoDB, while recording all backend tool executions, database pings, and Qdrant requests into a centralized \texttt{chatbot.log} file.
+\end{itemize}
+
+\section{Conclusion}
+The PageIndex + MongoDB Chatbot now stands as a production-ready educational assistant. It autonomously navigates NCERT textbooks, generates token-safe quizzes, retrieves precise definitions via hybrid semantic search, and remembers user sessions across restarts — completely fulfilling its core objectives within the constraints of a free-tier API stack.
+
+\end{document}

@@ -3,3 +3,9 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
+*.log
+scratch/
+batch_ingest_log.json
+exports/
+exports/
+batch_ingest_log.json

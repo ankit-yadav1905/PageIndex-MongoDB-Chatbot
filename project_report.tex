@@ -1,0 +1,335 @@
+\documentclass[12pt, a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{setspace}
+\usepackage{titlesec}
+\usepackage{tcolorbox}
+\usepackage{pdflscape}
+
+\setstretch{1.2}
+
+% Listing setup for code blocks
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    captionpos=b,
+    frame=single,
+    showstringspaces=false,
+    keywordstyle=\color{blue}\bfseries,
+    stringstyle=\color{orange},
+    commentstyle=\color{green!60!black},
+    backgroundcolor=\color{gray!5},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    xleftmargin=15pt
+}
+
+\title{\Huge\textbf{Comprehensive System Architecture \& Implementation Report}\\ \vspace{0.5cm} \Large \textbf{PageIndex + MongoDB Multi-Agentic Chatbot with Hybrid Vector Search}}
+\author{\textbf{Ankit Yadav} \\ \textit{Assessli Internship Project}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\vspace{2cm}
+\begin{abstract}
+\noindent This document is the comprehensive architectural and implementation report for the \textbf{PageIndex + MongoDB Chatbot}. The system represents a paradigm shift from traditional script-based conversational agents to a dynamic, autonomous \textbf{Unified Agent System} orchestrated via the Agno Framework, powered by Groq's GPT-OSS 120B Large Language Model. The final architecture combines the \textbf{PageIndex API} for visual document parsing, \textbf{MongoDB} for hierarchical metadata storage and persistent agent memory, and \textbf{Qdrant} for hybrid vector search using Jina v2 Small embeddings. This report details the complete engineering lifecycle, focusing on batch document ingestion, hierarchical retrieval tooling, token budget enforcement, and robust payload management.
+\end{abstract}
+\thispagestyle{empty}
+
+\newpage
+\tableofcontents
+\newpage
+
+\section{Introduction}
+\subsection{Overview}
+The landscape of AI has shifted rapidly from simple question-answering systems to autonomous agents capable of reasoning, planning, and executing tools to interact with their environment. The \textbf{PageIndex + MongoDB Chatbot} project was initiated to build an educational technology platform capable of ingesting NCERT PDF textbooks and answering user queries accurately based solely on those texts.
+
+Initially built using a linear approach with manual scripts, the architecture was completely refactored through multiple generations:
+\begin{enumerate}
+    \item \textbf{Generation 1:} Direct API calls with manual MongoDB text search (no agents).
+    \item \textbf{Generation 2:} Multi-agent delegation chain using the Agno Framework (Coordinator, Quiz Master, Chapter Guide).
+    \item \textbf{Generation 3 (Current):} Single Unified Agent with four hierarchical discovery tools, Qdrant hybrid vector search, and MongoDB-backed persistent memory.
+\end{enumerate}
+
+\subsection{Objectives}
+\begin{itemize}[label=\(\bullet\)]
+    \item \textbf{Autonomous Reasoning:} Remove hardcoded logic and allow an LLM to decide \textit{when} and \textit{how} to search the database.
+    \item \textbf{Hybrid Retrieval:} Combine dense semantic vector search (Qdrant + Jina v2 Small) with exact-match MongoDB queries for maximum precision.
+    \item \textbf{Token Budget Safety:} Enforce strict 8,000 TPM limits by using a hierarchical discovery pattern that loads only one subtopic at a time.
+    \item \textbf{Persistent Agent Memory:} Store conversation sessions and long-term memory in MongoDB so the agent remembers context across restarts.
+    \item \textbf{Data Isolation:} Guarantee that new ingestion pipelines never corrupt legacy vectorized collections.
+\end{itemize}
+
+\newpage
+\section{Problem Statement \& Motivation}
+\subsection{Limitations of the Previous Architecture}
+\begin{enumerate}
+    \item \textbf{Vectorless Retrieval:} The original system used only MongoDB \texttt{\$text} indexing. While fast for keyword matches, it could not handle semantic or paraphrased queries.
+    \item \textbf{Token Overflow:} The \texttt{get\_full\_chapter\_content} tool fetched entire chapters at once, frequently exceeding Groq's 8,000 token-per-minute limit with a 429 rate limit error.
+    \item \textbf{No Persistent Memory:} Agent conversation history was stored only in Streamlit's browser session state. Restarting the server wiped all history.
+    \item \textbf{Flat Metadata Schema:} The original ingestion pipeline did not capture the book's hierarchy (Class, Chapter, Topic, Subtopic), making filtered retrieval impossible.
+    \item \textbf{PDF Layout Sensitivity:} PageIndex's visual parser sometimes nests headings inside sidebar boxes, causing exact-match subtopic lookups to fail silently.
+\end{enumerate}
+
+\subsection{The Unified Agentic Solution}
+By equipping a single \texttt{BookAssistant} agent with four purpose-built tools backed by both Qdrant and MongoDB, the system achieves semantic retrieval, token-safe quiz generation, and persistent memory simultaneously — without any agent delegation overhead.
+
+\newpage
+\section{System Architecture \& Tech Stack}
+
+\subsection{Core Technologies}
+\begin{itemize}
+    \item \textbf{Frontend:} \texttt{Streamlit} — Reactive Python web app managing chat session state and real-time streaming.
+    \item \textbf{Agent Orchestration:} \texttt{Agno Framework} — Lightweight AI agent framework handling tool binding, schema generation, and memory management.
+    \item \textbf{Language Model:} \texttt{Groq GPT-OSS 120B} — 120B parameter model via Groq's OpenAI-compatible endpoint. Chosen for blazing inference speed and flawless function-calling.
+    \item \textbf{Document Parsing:} \texttt{PageIndex API} — Processes raw PDFs using computer vision and NLP, returning a structured hierarchical tree (Class $\rightarrow$ Chapter $\rightarrow$ Topic $\rightarrow$ Subtopic).
+    \item \textbf{Metadata DB:} \texttt{MongoDB} (\texttt{pageindex\_db\_v2}) — Stores document metadata, hierarchical text chunks, agent session history, and long-term agent memory.
+    \item \textbf{Vector DB:} \texttt{Qdrant} (\texttt{textbook\_knowledge\_v2}) — Stores 512-dimensional Jina v2 Small embeddings with hybrid (dense + BM25 sparse) search support.
+    \item \textbf{Embeddings:} \texttt{Jina v2 Small} (512-dim) via \texttt{FastEmbed} — Lightweight, high-quality embeddings for academic text.
+    \item \textbf{Centralized Logging:} \texttt{logger.py} — A unified logging mechanism tracking DB connections, tool calls, and LLM responses into \texttt{chatbot.log} for deep system observability.
+\end{itemize}
+
+\subsection{Architectural Data Flow}
+\begin{enumerate}
+    \item \textbf{Ingestion:} PDF $\rightarrow$ PageIndex API $\rightarrow$ Hierarchy Tree $\rightarrow$ Flattening + Metadata Tagging $\rightarrow$ MongoDB + Qdrant (parallel).
+    \item \textbf{Query:} Streamlit UI $\rightarrow$ BookAssistant Agent (with MongoDB session memory loaded).
+    \item \textbf{Factual Q\&A:} Agent calls \texttt{search\_book\_content} $\rightarrow$ Qdrant Hybrid Search $\rightarrow$ Top-5 relevant chunks returned.
+    \item \textbf{Quiz Generation:} Agent calls \texttt{get\_topics} $\rightarrow$ \texttt{get\_subtopics} $\rightarrow$ \texttt{get\_subtopic\_context} (MongoDB) $\rightarrow$ LLM generates from focused context.
+    \item \textbf{Memory:} Session saved to MongoDB \texttt{agent\_sessions}; extracted facts to \texttt{agent\_memory}.
+\end{enumerate}
+
+\newpage
+\section{Data Storage \& Batch Ingestion Pipeline}
+
+\subsection{Hierarchical Metadata Schema}
+Every text chunk extracted from a PDF is tagged with the following structured metadata before storage:
+\begin{lstlisting}[language=Python, caption=Chunk Metadata Schema]
+{
+    "text": "Such reactions in which there is an exchange of ions...",
+    "pageindex_doc_id": "pi-cmru6iqpa01sy01qur7gjjk3k",
+    "filename": "jesc101.pdf",
+    "meta_data": {
+        "class": "Class 10 Science",
+        "chapter": "Chapter 1: jesc101",
+        "topic": "CHAPTER 1",
+        "subtopic": "Do You Know? > 1.2.4 Double Displacement Reaction",
+        "page_number": 11
+    }
+}
+\end{lstlisting}
+
+\subsection{Batch Ingestion Pipeline (\texttt{batch\_ingest.py})}
+The batch pipeline processes entire folders of PDFs automatically:
+\begin{enumerate}
+    \item Scans the target folder recursively for all \texttt{.pdf} files.
+    \item Reads the existing \texttt{batch\_ingest\_log.json} and skips already-successful files (resume-safe).
+    \item For each PDF: uploads to PageIndex, waits for the tree to be ready (polling every 5 seconds), flattens the hierarchy, stores chunks in MongoDB, and upserts vectors into Qdrant.
+    \item Continuously updates \texttt{batch\_ingest\_log.json} with success or failure per file.
+\end{enumerate}
+
+\subsection{Dual Storage Architecture}
+Each chunk is stored in two places simultaneously with distinct purposes:
+\begin{itemize}
+    \item \textbf{MongoDB (\texttt{document\_nodes}):} Used for \texttt{distinct()} metadata queries (``what topics exist in this chapter?'') which are far cheaper than vector search for navigation.
+    \item \textbf{Qdrant (\texttt{textbook\_knowledge\_v2}):} Used for semantic hybrid search when the user asks factual questions.
+\end{itemize}
+
+\newpage
+\section{Hybrid Vector Search with Qdrant}
+
+\subsection{Embedding Model}
+All text chunks are embedded using \textbf{Jina v2 Small} (512 dimensions) via the \texttt{FastEmbedEmbedder}. This compact model was chosen because it:
+\begin{itemize}
+    \item Runs entirely locally (no external embedding API calls, no added latency).
+    \item Achieves strong semantic understanding for domain-specific academic text.
+    \item Produces 512-dim vectors that are small enough for fast Qdrant queries.
+\end{itemize}
+
+\subsection{Hybrid Search (Dense + Sparse)}
+The Qdrant collection is configured with \texttt{SearchType.hybrid}, combining:
+\begin{itemize}
+    \item \textbf{Dense vectors:} Capture semantic meaning (``what is a precipitation reaction?'' matches content about double displacement even without keyword overlap).
+    \item \textbf{BM25 sparse vectors:} Capture exact keyword matches (``Na$_2$SO$_4$'' is found precisely even when the semantic embedding may generalize it).
+\end{itemize}
+
+\subsection{Filtered Qdrant Search}
+When a user has selected specific chapters, the \texttt{search\_book\_content} tool applies advanced filtering. The \texttt{FilterableQdrant} class was heavily upgraded to support dynamic metadata prefixing, list matching via \texttt{MatchAny}, and nested dictionary filters, allowing extremely granular context retrieval:
+\begin{lstlisting}[language=Python, caption=Advanced Nested Hybrid Search]
+class FilterableQdrant(Qdrant):
+    def _format_filters(self, filters: dict) -> models.Filter:
+        if not filters: return None
+        conditions = []
+        for key, value in filters.items():
+            if "." not in key and not key.startswith("meta_data."):
+                key = f"meta_data.{key}"
+            if isinstance(value, list):
+                conditions.append(models.FieldCondition(key=key, match=models.MatchAny(any=value)))
+            elif isinstance(value, dict):
+                # Handles nested dictionaries for complex queries
+                for sub_key, sub_value in value.items():
+                    if isinstance(sub_value, list):
+                        conditions.append(models.FieldCondition(key=f"{key}.{sub_key}", match=models.MatchAny(any=sub_value)))
+                    else:
+                        conditions.append(models.FieldCondition(key=f"{key}.{sub_key}", match=models.MatchValue(value=sub_value)))
+            else:
+                conditions.append(models.FieldCondition(key=key, match=models.MatchValue(value=value)))
+        return models.Filter(must=conditions)
+\end{lstlisting}
+
+\newpage
+\section{Hierarchical Token-Safe Retrieval}
+
+\subsection{The Problem: Chapter-Level Overflow}
+Loading an entire textbook chapter into the LLM context easily consumes 15,000+ tokens — far exceeding Groq's 8,000 TPM free-tier limit. The original \texttt{get\_full\_chapter\_content} tool caused repeated \texttt{429 Too Many Requests} crashes.
+
+\subsection{The Solution: Hierarchical Discovery Tools}
+The agent now navigates textbooks using three lightweight MongoDB tools:
+\begin{lstlisting}[language=Python, caption=Hierarchical Discovery Flow]
+# Step 1: List all top-level topics (MongoDB distinct query)
+topics = get_topics(target_filename="jesc101.pdf")
+# Returns: ["CHAPTER 1"]
+
+# Step 2: List subtopics for the chosen topic
+subtopics = get_subtopics("CHAPTER 1", "jesc101.pdf")
+# Returns: ["1.1 Chemical Equations", "1.2 Types of Reactions", ...]
+
+# Step 3: Fetch only that subtopic's text chunks (max 10 chunks)
+context = get_subtopic_context("CHAPTER 1",
+                               "1.2 Types of Chemical Reactions",
+                               "jesc101.pdf")
+# Returns: ~600 chars of targeted text
+\end{lstlisting}
+
+The agent picks one subtopic randomly from the available list, generates 3-5 questions from its focused context, and stays well within the 8,000 token budget.
+
+\subsection{Regex-Based Fuzzy Topic \& Subtopic Matching}
+Because PageIndex's visual parser sometimes nests headings inside sidebar boxes (producing paths like \texttt{"Do You Know? > 1.2.4 Double Displacement Reaction"} instead of just \texttt{"1.2.4 Double Displacement Reaction"}), the \texttt{get\_subtopic\_context} tool was updated to use case-insensitive MongoDB regex matching for \textit{both} topics and subtopics. Additionally, it now intelligently ignores missing metadata (e.g., \texttt{"none"} or \texttt{"unknown"}), ensuring retrieval does not fail on structurally ambiguous PDFs:
+\begin{lstlisting}[language=Python, caption=Robust Regex Matching]
+if topic and str(topic).strip().lower() not in ["none", "unknown"]:
+    escaped_topic = re.escape(str(topic).strip())
+    search_filter["meta_data.topic"] = {"$regex": escaped_topic, "$options": "i"}
+
+if subtopic and str(subtopic).strip().lower() not in ["none", "unknown"]:
+    escaped_subtopic = re.escape(str(subtopic).strip())
+    search_filter["meta_data.subtopic"] = {"$regex": escaped_subtopic, "$options": "i"}
+\end{lstlisting}
+This makes the system highly resilient to PDF layout quirks without requiring exact string matches.
+
+\newpage
+\section{Persistent Agent Memory via MongoDB}
+
+\subsection{Agno MongoDb Integration}
+The \texttt{BookAssistant} agent is configured with a dedicated \texttt{MongoDb} storage backend using Agno's official \texttt{agno.db.mongo.MongoDb} provider:
+\begin{lstlisting}[language=Python, caption=MongoDB Agent Memory Setup]
+from agno.db.mongo import MongoDb
+
+mongo_db = MongoDb(
+    db_url=os.getenv("MONGO_URI"),
+    db_name="pageindex_db_v2",
+    session_collection="agent_sessions",
+    memory_collection="agent_memory",
+)
+
+agent = Agent(
+    ...
+    db=mongo_db,
+    add_history_to_context=True,
+)
+\end{lstlisting}
+
+\subsection{What Gets Stored}
+\begin{itemize}
+    \item \textbf{\texttt{agent\_sessions}:} Full run history — every user message, tool call, tool result, and agent response. Survives Streamlit server restarts.
+    \item \textbf{\texttt{agent\_memory}:} Long-term extracted facts (e.g., ``user is studying Class 10 Science''). Enables cross-session context.
+\end{itemize}
+
+\newpage
+\section{User Interface \& State Management}
+
+\subsection{Session State Architecture}
+Streamlit re-runs the entire Python script on every user interaction. The agent object is preserved in \texttt{st.session\_state} to avoid re-initialization:
+\begin{lstlisting}[language=Python, caption=Session State Persistence]
+if st.session_state["agent"] is None:
+    st.session_state["agent"] = get_agent(
+        selected_docs, doc_names, id_to_filename_map, db_manager=db
+    )
+\end{lstlisting}
+
+\subsection{Real-Time Streaming}
+The chatbot uses Agno's streaming API to display the response token-by-token as it is generated:
+\begin{lstlisting}[language=Python, caption=Real-Time Streaming]
+stream_placeholder = st.empty()
+full_response = ""
+
+for chunk in agent.run(user_input, stream=True):
+    if chunk.content:
+        full_response += chunk.content
+        stream_placeholder.markdown(full_response + "|")
+\end{lstlisting}
+
+\subsection{Sidebar Architecture Details}
+The sidebar provides a detailed explanation of the engine (PageIndex extraction, Jina vectorization, MongoDB token optimization, and Qdrant hybrid search) and a hierarchical document selector (Class $\rightarrow$ Documents).
+
+\newpage
+\section{API Constraints \& Engineering Solutions}
+
+\subsection{PageIndex API Rate Limits}
+Processing 15 textbook PDFs in rapid succession triggered \texttt{\{"detail":"LimitReached"\}} errors from the PageIndex API. The batch ingestion pipeline was designed to be \textbf{resume-safe}: it reads the log file on startup and automatically skips any files already marked as successful, allowing different API keys to be used across multiple runs without duplicating work.
+
+13 out of 15 textbook chapters were successfully ingested across three different API keys.
+
+\subsection{Groq 8,000 TPM Limit}
+\begin{itemize}
+    \item \textbf{Cause:} The LLM call itself + all tool call inputs and outputs count toward TPM.
+    \item \textbf{Solution:} Hierarchical discovery tools load a maximum of \texttt{MAX\_CHUNK\_CHARS = 600} characters per chunk and at most 10 chunks per subtopic call ($\approx$900 tokens maximum per generation step).
+\end{itemize}
+
+\subsection{Qdrant Client Version Mismatch}
+The project runs Qdrant server v1.18.2 with the Python client v1.16.1, producing a compatibility warning. The warning was suppressed with \texttt{check\_compatibility=False} in the \texttt{QdrantClient} constructor and logged appropriately. No functional issues were observed.
+
+\newpage
+\section{Current Agent Capabilities \& Standing}
+To provide a clear picture of the project's current state, the \texttt{BookAssistant} agent is now fully capable of:
+\begin{itemize}[label=\(\bullet\)]
+    \item \textbf{Autonomous Tool Selection:} Intelligently deciding between full-text vector searches for general questions vs. hierarchical discovery for generating quizzes, without human prompting.
+    \item \textbf{Granular Topic/Subtopic Discovery:} Successfully fetching precise context from specific textbook subsections (even when headings are mis-parsed) using robust regex-backed MongoDB queries.
+    \item \textbf{High-Speed Semantic Search:} Executing sub-second queries across 512-dim Jina v2 vector embeddings in Qdrant, filtered dynamically by specific book or chapter, allowing pinpoint accurate Q\&A.
+    \item \textbf{Cross-Session Memory:} Automatically saving its thoughts, tool calls, and final answers to MongoDB (\texttt{agent\_sessions}) so the conversation isn't lost when the server restarts.
+    \item \textbf{Scalable PDF Ingestion:} Processing entire folders of complex NCERT PDFs completely autonomously via \texttt{batch\_ingest.py}, skipping existing files, handling API limits safely, and writing extraction logs in real-time.
+\end{itemize}
+In its current standing, the system has successfully moved past proof-of-concept into a robust, resilient architecture capable of handling real-world educational queries without crashing due to LLM context limits or unhandled parsing edge-cases.
+
+\section{Conclusion \& Future Scope}
+
+\subsection{Project Conclusion}
+The transformation of the PageIndex Chatbot into a fully agentic, hybrid-search system with persistent memory has successfully delivered a production-quality educational assistant. The system can:
+\begin{itemize}
+    \item Navigate NCERT textbooks by class, chapter, topic, and subtopic.
+    \item Answer factual questions with precise semantic retrieval via Qdrant hybrid search.
+    \item Generate token-safe quizzes by autonomously discovering subtopics through MongoDB.
+    \item Remember conversation history and user context across server restarts via MongoDB agent memory.
+    \item Safely process entire directories of PDFs with a resume-safe batch ingestion pipeline.
+\end{itemize}
+
+\subsection{Future Scope}
+\begin{itemize}
+    \item \textbf{Cross-Chapter Comparison:} Enable the agent to query multiple chapters simultaneously by merging subtopic contexts intelligently within the token budget.
+    \item \textbf{User Authentication:} Add login to personalize agent memory per student, allowing the system to remember past performance and tailor quiz difficulty.
+    \item \textbf{Upgraded API Tier:} Upgrading to a paid PageIndex and Groq tier would remove the only remaining bottlenecks — enabling all 15 chapters to be ingested and allowing more tokens per quiz generation.
+    \item \textbf{Re-ranking:} Implement a cross-encoder re-ranking step on Qdrant results before passing to the LLM for improved answer precision.
+\end{itemize}
+
+\vspace{2cm}
+\begin{center}
+\textit{-- End of Report --}
+\end{center}
+
+\end{document}

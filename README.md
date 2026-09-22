@@ -1,31 +1,39 @@
 # 📚 PageIndex + MongoDB + Agno Agent Chatbot
 
-## Kya hai ye project?
+## What is this project?
 
-Ye ek **NCERT Book Chatbot** hai jo **Agno Agent Framework** use karta hai with **Gemini LLM** aur **MongoDB Full-Text Search**. Matlab aap ek PDF book upload karte ho, uske sub-topic level chunks MongoDB mein store hote hain, aur fir ek AI agent aapke questions ka answer deta hai by actually searching those chunks using tool calling.
+This is an **NCERT Book Chatbot** that uses the **Agno Agent Framework** with **Gemini LLM** and **MongoDB Full-Text Search**.
 
----
-
-## 🔄 Purana Code vs Naya Code — Kya Changes Kiye
-
-### Pehle kya tha (Old Architecture):
-- Direct Gemini/OpenAI API call hoti thi — koi agent framework nahi tha
-- `sync.py` ek separate utility script tha jo manually run karna padta tha text nodes download karne ke liye
-- MongoDB sirf metadata store karta tha (filename, doc_id, date)
-- UI mein koi tool call visibility nahi thi — bas spinner ghoomta tha aur answer aa jaata tha
-
-### Ab kya hai (New Architecture):
-- **Agno Agent Framework** integrate kiya hai — proper `Agent` with `tools` aur `instructions`
-- **Sub-topic chunks ab automatically ingest hote hain** — jaise hi PDF upload hoti hai, PageIndex se tree fetch hota hai aur MongoDB mein store hota hai
-- **MongoDB Full-Text Search** — `$text` index lagaya hai `text` aur `content` fields pe for fast search
-- **Tool Calling** — Agent ke paas `search_book_content` tool hai jo MongoDB mein search karta hai
-- **Frontend mein Tool Calls dikhte hain** — UI mein expander mein tool name, arguments, aur results sab visible hain
+The basic idea is that you upload a PDF book, its content is broken down into **sub-topic-level chunks** and stored in MongoDB, and then an AI agent answers user questions by actually searching those chunks through **tool calling**.
 
 ---
 
-## 📁 Project Structure — Kaun si file kya karti hai
+# 🔄 Old Code vs New Code — What Changed?
 
-```
+## Previous Architecture
+
+Previously:
+
+* Direct Gemini/OpenAI API calls were made — there was no agent framework.
+* `sync.py` was a separate utility script that had to be run manually to download the text nodes.
+* MongoDB was used only for storing metadata such as filename, document ID, and date.
+* The UI did not show any tool calls — it only displayed a spinner while the answer was being generated.
+
+## New Architecture
+
+Now:
+
+* **Agno Agent Framework** has been integrated — there is a proper `Agent` with `tools` and `instructions`.
+* **Sub-topic chunks are automatically ingested** — as soon as a PDF is uploaded, the PageIndex tree is fetched and stored in MongoDB.
+* **MongoDB Full-Text Search** is used — a `$text` index is created on the `text` and `content` fields for fast search.
+* **Tool Calling** is implemented — the agent has a `search_book_content` tool that searches MongoDB.
+* **Tool Calls are visible in the frontend** — the UI displays the tool name, arguments, and results inside an expandable section.
+
+---
+
+# 📁 Project Structure — What Each File Does
+
+```text
 src/
 ├── database.py          # MongoDB connection + text search
 ├── ingest_document.py   # PDF upload + sub-topic chunking
@@ -33,144 +41,339 @@ src/
 └── app.py               # Streamlit Frontend UI
 ```
 
-### 1. `database.py` — Database Layer
+---
 
-**Kya change kiya:**
-- Ek naya collection add kiya: `extracted_nodes` — ye sub-topic chunks store karta hai
-- MongoDB `$text` index banaya `text` aur `content` fields pe (name: `subtopic_text_index`)
-- `search_nodes()` method add kiya jo full-text search karta hai with `textScore` sorting
+# 1. `database.py` — Database Layer
 
-**Kaise kaam karta hai:**
+### What was changed?
+
+* Added a new collection: `extracted_nodes` — this stores the sub-topic chunks.
+* Created a MongoDB `$text` index on the `text` and `content` fields.
+* The index is named `subtopic_text_index`.
+* Added a `search_nodes()` method that performs full-text search with `textScore` sorting.
+
+### How it works
+
+```text
+User question
+      ↓
+MongoDB $text search
+      ↓
+Top 5 relevant chunks
 ```
-User question → MongoDB $text search → Top 5 relevant chunks return
-```
 
-### 2. `ingest_document.py` — Ingestion Script
+MongoDB searches the indexed content and ranks the matching documents using MongoDB's text relevance score.
 
-**Kya change kiya:**
-- Pehle sirf PDF upload hoti thi aur metadata save hota tha
-- Ab upload ke turant baad `pi_client.get_tree(doc_id)` call hota hai
-- Tree se saare nodes nikal ke `extracted_nodes` collection mein `insert_many()` se daal diye jaate hain
-- Har node ke saath `pageindex_doc_id` attach hota hai taaki baad mein search scope specific rahe
+---
 
-**Run kaise karein:**
+# 2. `ingest_document.py` — Ingestion Script
+
+### What was changed?
+
+Previously, the script only uploaded the PDF and saved its metadata.
+
+Now:
+
+* After uploading the PDF, `pi_client.get_tree(doc_id)` is called.
+* The PageIndex tree is retrieved.
+* All nodes are extracted from the tree.
+* The extracted nodes are inserted into the `extracted_nodes` collection using `insert_many()`.
+* Each node also stores the `pageindex_doc_id`, which allows the search to remain specific to the selected document.
+
+### How to run it
+
 ```bash
 .\venv\Scripts\python.exe src/ingest_document.py "C:\path\to\ncert_book.pdf"
 ```
 
-### 3. `chatbot.py` — Agno Agent + Tool Calling (MAIN CHANGE)
+---
 
-**Kya change kiya:**
-- **Pehle:** Direct `openai.ChatCompletion.create()` ya Gemini API call
-- **Ab:** `agno.agent.Agent` use hota hai with proper tool registration
+# 3. `chatbot.py` — Agno Agent + Tool Calling
 
-**Technical Details:**
-- `OpenAIChat` model use kiya hai jo Google ke **OpenAI-compatible endpoint** pe point karta hai
-  - URL: `https://generativelanguage.googleapis.com/v1beta/openai/`
-  - Ye isliye kiya kyunki `agno.models.google.Gemini` Python 3.9 pe compatible nahi hai (google-genai SDK version issues)
-- `search_book_content` ek Python function hai jo `@tool` ki tarah kaam karta hai
-  - Ye MongoDB mein `$text` search karta hai
-  - Top 5 results ko formatted string mein return karta hai
-- Agent ko instruction diya hai ki **"ALWAYS use the tool before answering"**
+This is the **main architectural change** in the project.
 
-**Agent Flow:**
-```
-User: "Chemical reactions ke baare mein batao"
-   ↓
-Agent decides: "Mujhe search_book_content tool call karna chahiye"
-   ↓
-Tool Call: search_book_content(query="chemical reactions")
-   ↓
-MongoDB: $text search → returns 5 matching chunks
-   ↓
-Agent: Chunks padhke answer generate karta hai
-   ↓
-User ko answer milta hai with tool call details visible in UI
+### What was changed?
+
+Previously:
+
+```text
+Direct OpenAI/Gemini API call
 ```
 
-### 4. `app.py` — Streamlit Frontend
+Now:
 
-**Kya change kiya:**
-- Chat history maintain hoti hai `st.session_state` mein
-- Document select karne pe agent re-initialize hota hai
-- Agent ka response aane ke baad **tool calls extract** kiye jaate hain:
-  - Konsa tool call hua (`search_book_content`)
-  - Kya arguments the (`query: "..."`)
-  - Kya result aaya (content preview)
-- Ye sab ek **expandable section** mein dikhta hai UI mein
-- `asyncio` event loop fix kiya hai Streamlit + Agno compatibility ke liye
+```text
+Agno Agent
+     ↓
+Registered Tools
+     ↓
+MongoDB Search
+     ↓
+Gemini
+```
+
+The application now uses `agno.agent.Agent` with proper tool registration and agent instructions.
 
 ---
 
-## 🛠️ Tech Stack
+## Technical Details
 
-| Component | Technology | Kyun use kiya |
-|-----------|-----------|---------------|
-| Agent Framework | **Agno** (v2.6.9) | Proper tool calling, agent lifecycle management |
-| LLM | **Gemini 2.0 Flash Lite** | Fast, free tier available |
-| LLM Access | **OpenAI-compatible endpoint** | Python 3.9 pe google-genai SDK issue avoid karne ke liye |
-| Database | **MongoDB** (Docker) | Full-text search with `$text` index |
-| Document Processing | **PageIndex API** | PDF se sub-topic level chunks extract karta hai |
-| Frontend | **Streamlit** (v1.12.0) | Quick UI, session state management |
+### LLM Integration
+
+The project uses `OpenAIChat`, but it is configured to communicate with Google's **OpenAI-compatible Gemini endpoint**:
+
+```text
+https://generativelanguage.googleapis.com/v1beta/openai/
+```
+
+This approach was used because the `agno.models.google.Gemini` integration had compatibility issues with **Python 3.9**, particularly due to `google-genai` SDK version compatibility.
+
+Therefore, instead of directly using the Agno Gemini model integration, the application uses Google's official OpenAI-compatible endpoint through `OpenAIChat`.
 
 ---
 
-## 🚀 Setup & Run
+## `search_book_content` Tool
 
-### Prerequisites
-- Python 3.9+
-- Docker (MongoDB ke liye)
-- PageIndex API Key
-- Gemini API Key
+A Python function called `search_book_content` acts as the agent's search tool.
 
-### Installation
+The tool:
+
+1. Receives the search query.
+2. Searches MongoDB using `$text`.
+3. Retrieves the most relevant chunks.
+4. Returns the top 5 results in a formatted string.
+5. The agent reads those results and uses them to generate the final answer.
+
+The agent is explicitly instructed:
+
+```text
+ALWAYS use the tool before answering
+```
+
+This ensures that the agent searches the uploaded book before generating an answer.
+
+---
+
+# Agent Flow
+
+Suppose the user asks:
+
+```text
+Tell me about chemical reactions
+```
+
+The actual flow is:
+
+```text
+User:
+"Tell me about chemical reactions"
+        ↓
+Agno Agent
+        ↓
+Agent decides:
+"I need to call search_book_content"
+        ↓
+Tool Call:
+search_book_content(query="chemical reactions")
+        ↓
+MongoDB
+        ↓
+$text search
+        ↓
+Top 5 matching chunks
+        ↓
+Agent receives the chunks
+        ↓
+Agent generates the answer
+        ↓
+User receives the answer
++
+Tool call details are visible in the UI
+```
+
+This makes the chatbot more transparent because the user can see what the agent searched before producing an answer.
+
+---
+
+# 4. `app.py` — Streamlit Frontend
+
+### What was changed?
+
+The Streamlit frontend now provides:
+
+* Chat history using `st.session_state`.
+* Document selection.
+* Agent re-initialization whenever a different document is selected.
+* Tool-call visibility.
+* Expandable sections showing the agent's tool activity.
+* An `asyncio` event-loop fix for Streamlit + Agno compatibility.
+
+---
+
+## Tool Call Visibility
+
+After the agent responds, the application extracts information about the tool calls, including:
+
+* Which tool was called:
+
+  ```text
+  search_book_content
+  ```
+
+* What arguments were passed:
+
+  ```text
+  query: "chemical reactions"
+  ```
+
+* What result was returned:
+
+  ```text
+  Content preview...
+  ```
+
+This information is displayed inside an expandable section in the Streamlit UI.
+
+Therefore, instead of simply seeing:
+
+```text
+Generating answer...
+```
+
+the user can inspect what the agent actually did.
+
+---
+
+# 🛠️ Tech Stack
+
+| Component           | Technology                     | Why it is used                                               |
+| ------------------- | ------------------------------ | ------------------------------------------------------------ |
+| Agent Framework     | **Agno** (v2.6.9)              | Proper tool calling and agent lifecycle management           |
+| LLM                 | **Gemini 2.0 Flash Lite**      | Fast and available through the free tier                     |
+| LLM Access          | **OpenAI-compatible endpoint** | Avoids the Python 3.9 `google-genai` SDK compatibility issue |
+| Database            | **MongoDB** (Docker)           | Full-text search using a `$text` index                       |
+| Document Processing | **PageIndex API**              | Extracts sub-topic-level content from PDFs                   |
+| Frontend            | **Streamlit** (v1.12.0)        | Quick UI development and session-state management            |
+
+---
+
+# 🚀 Setup & Run
+
+## Prerequisites
+
+The project requires:
+
+* Python 3.9+
+* Docker for MongoDB
+* PageIndex API Key
+* Gemini API Key
+
+---
+
+## Installation
+
+Create the virtual environment:
+
 ```bash
 python -m venv venv
+```
+
+Activate it:
+
+```bash
 .\venv\Scripts\activate
+```
+
+Install the required dependencies:
+
+```bash
 pip install -r requirements.txt
+```
+
+Install the required additional packages:
+
+```bash
 pip install agno==2.6.9 google-genai openai
 ```
 
-### Environment Variables (`.env` file)
+---
+
+# Environment Variables
+
+Create a `.env` file:
+
 ```env
 PAGEINDEX_API_KEY=your_key_here
 GEMINI_API_KEY=your_gemini_key_here
 MONGO_URI=mongodb://admin:password@localhost:27017/
 ```
 
-### Start MongoDB
+---
+
+# Start MongoDB
+
+Run:
+
 ```bash
 docker-compose up -d
 ```
 
-### Ingest a Book
+This starts the MongoDB container in the background.
+
+---
+
+# Ingest a Book
+
+Run:
+
 ```bash
 .\venv\Scripts\python.exe src/ingest_document.py "C:\path\to\book.pdf"
 ```
 
-### Run the Chatbot
+The ingestion process will:
+
+```text
+PDF
+ ↓
+PageIndex
+ ↓
+Document Tree
+ ↓
+Sub-topic Nodes
+ ↓
+MongoDB extracted_nodes
+```
+
+---
+
+# Run the Chatbot
+
+Run:
+
 ```bash
 .\venv\Scripts\python.exe -m streamlit run src/app.py
 ```
-Browser mein `http://localhost:8501` kholo aur chat karo!
+
+Then open:
+
+```text
+http://localhost:8501
+```
+
+in your browser and start chatting with the uploaded book.
 
 ---
 
-## 🧠 Mentor ke liye Key Points
+# 📊 MongoDB Collections
 
-1. **Agno Agent Framework** use kiya hai — direct API calls nahi, proper agent with tools
-2. **Tool Calling** implement kiya hai — agent khud decide karta hai kab search karna hai
-3. **MongoDB Full-Text Search** — `$text` index with `textScore` ranking
-4. **Sub-topic level chunking** — PageIndex ka `get_tree()` use karke automatic chunking
-5. **Frontend mein tool calls visible** — transparency hai ki agent kya kar raha hai
-6. **OpenAI-compatible endpoint** — Google ka official endpoint hai, production-ready approach hai
-7. **Error handling** — retries disabled (`max_retries=0`, `retries=0`), fail fast approach
+The application uses two main collections.
 
 ---
 
-## 📊 MongoDB Collections
+## `document_nodes` — Document Metadata
 
-### `document_nodes` — Document Metadata
+Example:
+
 ```json
 {
   "filename": "jesc101.pdf",
@@ -181,7 +384,14 @@ Browser mein `http://localhost:8501` kholo aur chat karo!
 }
 ```
 
-### `extracted_nodes` — Sub-topic Chunks (TEXT INDEXED)
+This collection stores information about the uploaded documents.
+
+---
+
+## `extracted_nodes` — Sub-topic Chunks
+
+Example:
+
 ```json
 {
   "title": "Chemical Reactions and Equations",
@@ -192,12 +402,174 @@ Browser mein `http://localhost:8501` kholo aur chat karo!
 }
 ```
 
-Text index: `subtopic_text_index` on fields `text` + `content`
+These are the actual searchable content chunks extracted from the PageIndex document tree.
 
 ---
 
-## ⚠️ Known Issues / Limitations
+## Text Index
 
-- **Python 3.9 constraint** — Isse newer Streamlit (chat UI) aur google-genai SDK nahi chal paate, isliye workarounds lagaye hain
-- **Gemini Free Tier Quota** — Daily limit hai, agar exceed ho jaaye to "429 RESOURCE_EXHAUSTED" error aata hai, thodi der wait karo
-- **Streamlit 1.12** — `st.chat_message` available nahi hai, isliye `st.text_input` + `st.expander` use kiya hai
+The collection has a MongoDB text index:
+
+```text
+subtopic_text_index
+```
+
+The index is created over:
+
+```text
+text
+content
+```
+
+This allows MongoDB to perform full-text searches over the extracted sub-topic content.
+
+---
+
+# ⚠️ Known Issues / Limitations
+
+## 1. Python 3.9 Constraint
+
+The project currently has a Python 3.9 compatibility constraint.
+
+Because of this:
+
+* Newer versions of Streamlit cannot be used freely.
+* The `google-genai` SDK has compatibility/version issues.
+* The Agno Gemini integration cannot be used directly in the current setup.
+
+Workarounds have therefore been implemented.
+
+---
+
+## 2. Gemini Free-Tier Quota
+
+Gemini's free tier has usage limits.
+
+If the quota is exceeded, the application may return:
+
+```text
+429 RESOURCE_EXHAUSTED
+```
+
+In that situation, the user needs to wait until the quota becomes available again.
+
+---
+
+## 3. Streamlit 1.12
+
+The project uses:
+
+```text
+Streamlit 1.12.0
+```
+
+Because `st.chat_message` is not available in this version, the UI uses:
+
+```text
+st.text_input
+```
+
+along with:
+
+```text
+st.expander
+```
+
+to implement the chat interaction and tool-call visibility.
+
+---
+
+# 🔄 Complete End-to-End Architecture
+
+The complete system can be summarized as:
+
+```text
+                    ┌─────────────────────┐
+                    │     PDF Book        │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │   PageIndex API     │
+                    │   Document Tree     │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │ Sub-topic Extraction│
+                    └──────────┬──────────┘
+                               │
+                               ▼
+              ┌────────────────────────────────┐
+              │          MongoDB                │
+              │                                │
+              │  document_nodes                │
+              │  extracted_nodes               │
+              │       +                        │
+              │  $text Index                   │
+              └──────────────┬─────────────────┘
+                             │
+                             │ Search Tool
+                             ▼
+                    ┌─────────────────────┐
+                    │    Agno Agent       │
+                    │                     │
+                    │ Gemini 2.0 Flash    │
+                    │ Lite                │
+                    │                     │
+                    │ Tools + Instructions│
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │  Streamlit UI       │
+                    │                     │
+                    │ Answer              │
+                    │ +                   │
+                    │ Tool Calls          │
+                    │ +                   │
+                    │ Tool Results        │
+                    └─────────────────────┘
+```
+
+## Query-Time Flow
+
+```text
+User Question
+      ↓
+Streamlit
+      ↓
+Agno Agent
+      ↓
+search_book_content()
+      ↓
+MongoDB $text Search
+      ↓
+Top 5 Relevant Chunks
+      ↓
+Agno Agent
+      ↓
+Gemini
+      ↓
+Final Answer
+      ↓
+Streamlit
+      ↓
+Answer + Tool Call Details
+```
+
+This architecture separates the system into clear layers:
+
+```text
+Document Processing
+        ↓
+Data Storage
+        ↓
+Retrieval
+        ↓
+Agent Reasoning
+        ↓
+User Interface
+```
+
+The main architectural improvement is that the chatbot has moved from a **direct LLM-call architecture** to an **agent-based retrieval architecture**, where the Agno agent can use a registered MongoDB search tool to retrieve relevant information from the uploaded book before generating its response.
